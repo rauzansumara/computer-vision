@@ -105,6 +105,20 @@ class NNCovidModel:
             for param in model_pre.classif.parameters():
                 param.requires_grad = True
             input_size = 224
+
+        elif self.model_type == 'inception_v4':
+            model_pre = timm.create_model('inception_v4', pretrained=True)
+            model_pre.features[0].conv.in_channels = 1
+            model_pre.features[0].conv.weight = Parameter(model_pre.features[0].conv.weight[:, 1:2, :, :])
+            model_pre = set_parameter_requires_grad(model_pre)
+            num_ftrs = model_pre.num_features
+            model_pre.last_linear = nn.Linear(num_ftrs, self.num_classes)
+
+            for i in range(self.unfreeze_num):
+                model_pre.features[21] = freeze_by_idxs(model_pre.features[21], -i, False)
+            for param in model_pre.last_linear.parameters():
+                param.requires_grad = True
+            input_size = 224
         # elif self.model_type == 'efficientnetB0':
         #     model_pre = models.efficientnet_b0(pretrained=self.use_pretrained)
         #     # model_pre.conv1.in_channels = 1
