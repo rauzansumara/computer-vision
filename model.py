@@ -92,6 +92,38 @@ class NNCovidModel:
             for param in model_pre.fc.parameters():
                 param.requires_grad = True
             input_size = 224
+        elif self.model_type == 'vgg16':
+            model_pre=models.vgg16(pretrained=use_pretrained)
+            model_pre.features[0].in_channels=1
+            model_pre.features[0].weight=Parameter(model_pre.features[0].weight[:,1:2,:,:])
+            model_pre=set_parameter_requires_grad(model_pre)
+            num_ftrs=model_pre.classifier[6].in_features
+            model_pre.classifier[6]=nn.Linear(num_ftrs,num_classes
+            if unfreeze_num==1:
+                unfreeze=[-1]
+            elif unfreeze_num==2:
+                unfreeze=[-1,-3]
+            elif unfreeze_num==3:
+                unfreeze=[-1,-3,-5]
+            else:
+                unfreeze=[-1,-3,-5,-7]
+            model_pre.features=unfreeze_by_idxs(model_pre.features,unfreeze)
+            for param in model_pre.classifier.parameters():
+                param.requires_grad=True
+            input_size=224
+        elif self.model_type == 'xception':
+            model_pre = timm.create_model('xception', pretrained=True)
+            model_pre.conv2d_1a.conv.in_channels = 1
+            model_pre.conv2d_1a.conv.weight = Parameter(model_pre.conv2d_1a.conv.weight[:, 1:2, :, :])
+            model_pre = set_parameter_requires_grad(model_pre)
+            num_ftrs = model_pre.num_features
+            model_pre.classif = nn.Linear(num_ftrs, self.num_classes)
+
+            for i in range(self.unfreeze_num):
+                model_pre.mixed_7a = freeze_by_idxs(model_pre.mixed_7a, -i, False)
+            for param in model_pre.classif.parameters():
+                param.requires_grad = True
+            input_size = 224            
         elif self.model_type == 'inception_resnet':
             model_pre = timm.create_model('inception_resnet_v2', pretrained=True)
             model_pre.conv2d_1a.conv.in_channels = 1
@@ -105,7 +137,6 @@ class NNCovidModel:
             for param in model_pre.classif.parameters():
                 param.requires_grad = True
             input_size = 224
-
         elif self.model_type == 'inception_v4':
             model_pre = timm.create_model('inception_v4', pretrained=True)
             model_pre.features[0].conv.in_channels = 1
