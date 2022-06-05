@@ -10,13 +10,14 @@ from collections.abc import Iterable
 import timm
 from pathlib import Path
 import pickle
-from efficientnet_pytorch import EfficientNet
+import time
+import sys
 
-from dataset import COVIDxCTDataset
-from augmentations import CovidDatasetAugmentations
+from split_dataset import CovidDataset
+from image_transformations import CovidDatasetAugmentations
 
-from utils \
-    import calculate_label_prediction, calculate_all_prediction, calculate_label_recall, calculate_f1, confusion_matrix
+from cnn_tools import calculate_label_precision, calculate_all_precision,\
+    calculate_label_recall, calculate_f1, confusion_matrix, plot_confusion_matrix
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -93,39 +94,39 @@ class NNCovidModel:
                 param.requires_grad = True
             input_size = 224
         elif self.model_type == 'vgg16':
-            model_pre=models.vgg16(pretrained=use_pretrained)
+            model_pre=models.vgg16(pretrained=self.use_pretrained)
             model_pre.features[0].in_channels=1
             model_pre.features[0].weight=Parameter(model_pre.features[0].weight[:,1:2,:,:])
             model_pre=set_parameter_requires_grad(model_pre)
             num_ftrs=model_pre.classifier[6].in_features
-            model_pre.classifier[6]=nn.Linear(num_ftrs,num_classes
-            if unfreeze_num==1:
+            model_pre.classifier[6]=nn.Linear(num_ftrs,self.num_classes)
+            if self.unfreeze_num==1:
                 unfreeze=[-1]
-            elif unfreeze_num==2:
+            elif self.unfreeze_num==2:
                 unfreeze=[-1,-3]
-            elif unfreeze_num==3:
+            elif self.unfreeze_num==3:
                 unfreeze=[-1,-3,-5]
             else:
                 unfreeze=[-1,-3,-5,-7]
-            model_pre.features=unfreeze_by_idxs(model_pre.features,unfreeze)
+            model_pre.features=freeze_by_idxs(model_pre.features,unfreeze, False)
             for param in model_pre.classifier.parameters():
                 param.requires_grad=True
             input_size=224
         elif self.model_type == 'xception':
-            model_pre = timm.create_model('xception', pretrained=True)
-            model_pre.conv2d_1a.conv.in_channels = 1
-            model_pre.conv2d_1a.conv.weight = Parameter(model_pre.conv2d_1a.conv.weight[:, 1:2, :, :])
+            model_pre = timm.create_model('xception', pretrained=self.use_pretrained)
+            model_pre.conv1.in_channels = 1
+            model_pre.conv1.weight = Parameter(model_pre.conv1.weight[:, 1:2, :, :])
             model_pre = set_parameter_requires_grad(model_pre)
             num_ftrs = model_pre.num_features
-            model_pre.classif = nn.Linear(num_ftrs, self.num_classes)
+            model_pre.fc = nn.Linear(num_ftrs, self.num_classes)
 
             for i in range(self.unfreeze_num):
-                model_pre.mixed_7a = freeze_by_idxs(model_pre.mixed_7a, -i, False)
-            for param in model_pre.classif.parameters():
+                model_pre.conv4 = freeze_by_idxs(model_pre.conv4, -i, False)
+            for param in model_pre.fc.parameters():
                 param.requires_grad = True
             input_size = 224            
         elif self.model_type == 'inception_resnet':
-            model_pre = timm.create_model('inception_resnet_v2', pretrained=True)
+            model_pre = timm.create_model('inception_resnet_v2', pretrained=self.use_pretrained)
             model_pre.conv2d_1a.conv.in_channels = 1
             model_pre.conv2d_1a.conv.weight = Parameter(model_pre.conv2d_1a.conv.weight[:, 1:2, :, :])
             model_pre = set_parameter_requires_grad(model_pre)
@@ -138,7 +139,7 @@ class NNCovidModel:
                 param.requires_grad = True
             input_size = 224
         elif self.model_type == 'inception_v4':
-            model_pre = timm.create_model('inception_v4', pretrained=True)
+            model_pre = timm.create_model('inception_v4', pretrained=self.use_pretrained)
             model_pre.features[0].conv.in_channels = 1
             model_pre.features[0].conv.weight = Parameter(model_pre.features[0].conv.weight[:, 1:2, :, :])
             model_pre = set_parameter_requires_grad(model_pre)
@@ -150,33 +151,6 @@ class NNCovidModel:
             for param in model_pre.last_linear.parameters():
                 param.requires_grad = True
             input_size = 224
-        # elif self.model_type == 'efficientnetB0':
-        #     model_pre = models.efficientnet_b0(pretrained=self.use_pretrained)
-        #     # model_pre.conv1.in_channels = 1
-        #     # model_pre.conv1.weight = Parameter(model_pre.conv1.weight[:, 1:2, :, :])
-        #     model_pre = set_parameter_requires_grad(model_pre)
-        #
-        #     num_ftrs = model_pre.classifier._modules['1'].in_features
-        #     model_pre.classifier._modules['1'] = nn.Linear(num_ftrs, self.num_classes)
-        #
-        #     # for i in range(self.unfreeze_num):
-        #       #   model_pre.layer4 = freeze_by_idxs(model_pre.layer4, -i, False)
-        #     # for param in model_pre.fc.parameters():
-        #         # param.requires_grad = True
-        #     input_size = 224
-        # elif self.model_type == 'efficientnetB3':
-        #     model_pre = models.efficientnet_b3(pretrained=self.use_pretrained)
-        #     model_pre.conv1.in_channels = 1
-        #     model_pre.conv1.weight = Parameter(model_pre.conv1.weight[:, 1:2, :, :])
-        #     model_pre = set_parameter_requires_grad(model_pre)
-        #     num_ftrs = model_pre.fc.in_features
-        #     model_pre.fc = nn.Linear(num_ftrs, self.num_classes)
-        #
-        #     for i in range(self.unfreeze_num):
-        #         model_pre.layer4 = freeze_by_idxs(model_pre.layer4, -i, False)
-        #     for param in model_pre.fc.parameters():
-        #         param.requires_grad = True
-        #     input_size = 224
         else:
             print('model not implemented')
             return None, None
@@ -221,6 +195,9 @@ class NNCovidModel:
             optimizer.step()
 
             if idx % 100 == 99:
+                t = time.time()
+                t_ms = int(t * 1000)
+                print(f"The current time in milliseconds: {t_ms}")
                 print('train iteration:{},loss:{},acc:{}%'.format(idx, loss.item(),
                                                                   torch.sum(preds == labels.data) / batch_size * 100))
             running_loss += loss.item() * inputs.size(0)
@@ -231,7 +208,7 @@ class NNCovidModel:
         print('train_total Loss: {:.4f} Acc: {:.4f}%'.format(epoch_loss, epoch_acc * 100))
         return epoch_acc, epoch_loss
 
-    def test(self, criterion, best_acc, data_loaders, dataset_sizes):
+    def test(self, criterion, best_acc, data_loaders, dataset_sizes, plot_conf_matrix=False, index=1):
         self.model.eval()
         running_loss = 0.0
         running_corrects = 0
@@ -249,28 +226,30 @@ class NNCovidModel:
                 running_loss += loss.item() * inputs.size(0)
                 running_corrects += torch.sum(preds == labels.data)
 
-                # plot_confusion_matrix(conf_matrix, classes=class_names, normalize=False, title='confusion matrix')
+        if plot_conf_matrix:
+            plot_confusion_matrix(conf_matrix, classes=self.class_names, normalize=False,
+                                  title='Confusion Matrix {}'.format(self.model_type), index=index)
 
         epoch_loss = running_loss / dataset_sizes['val']
         epoch_acc = running_corrects.double() / dataset_sizes['val']
         print('val_total Loss: {:.4f} Acc: {:.4f}%'.format(epoch_loss, epoch_acc * 100))
 
-        all_prediction = calculate_all_prediction(conf_matrix)
-        print('all_prediction:{}'.format(all_prediction))
-        label_prediction = []
+        all_precision = calculate_all_precision(conf_matrix)
+        print('all_precision:{}'.format(all_precision))
+        label_precision = []
         label_recall = []
         for i in range(self.num_classes):
-            label_prediction.append(calculate_label_prediction(conf_matrix, i))
+            label_precision.append(calculate_label_precision(conf_matrix, i))
             label_recall.append(calculate_label_recall(conf_matrix, i))
 
         keys = self.class_names
         values = list(range(self.num_classes))
         dictionary = dict(zip(keys, values))
         for ei, i in enumerate(dictionary):
-            print(ei, '\t', i, '\t', 'prediction=', label_prediction[ei], '%,\trecall=', label_recall[ei], '%,\tf1=',
-                  calculate_f1(label_prediction[ei], label_recall[ei]))  # 输出每个类的，精确率，召回率，F1
-        p = round(np.array(label_prediction).sum() / len(label_prediction), 2)
-        r = round(np.array(label_recall).sum() / len(label_prediction), 2)
+            print(ei, '\t', i, '\t', 'precision=', label_precision[ei], '%,\trecall=', label_recall[ei], '%,\tf1=',
+                  calculate_f1(label_precision[ei], label_recall[ei]))  # 输出每个类的，精确率，召回率，F1
+        p = round(np.array(label_precision).sum() / len(label_precision), 2)
+        r = round(np.array(label_recall).sum() / len(label_precision), 2)
         print('MACRO-averaged:\nprediction=', p, '%,recall=', r, '%,f1=', calculate_f1(p, r))
 
         if epoch_acc > best_acc:
@@ -281,7 +260,9 @@ class NNCovidModel:
 
 
 if __name__ == '__main__':
-    covid_dataset = COVIDxCTDataset()
+    # model_type = 'inception_v4'
+    model_type = sys.argv[1]
+    covid_dataset = CovidDataset()
     train_df = covid_dataset.train_dataset()
     val_df = covid_dataset.val_dataset()
     test_df = covid_dataset.test_dataset()
@@ -291,7 +272,6 @@ if __name__ == '__main__':
     data_loaders, dataset_sizes = covid_augmentations.create_dataset_iterators(train_df, val_df, test_df)
 
     num_epochs = 10
-    model_type = 'resnet50'
     covid_NN = NNCovidModel(model_type)
 
     criterion = nn.CrossEntropyLoss()
@@ -308,7 +288,7 @@ if __name__ == '__main__':
         acc_train.append(epoch_acc_train)
         loss_train.append(epoch_loss_train)
         best_model_wts, best_acc, epoch_acc_val, epoch_loss_val = covid_NN.test(criterion, best_acc, data_loaders,
-                                                                                  dataset_sizes)
+                                                                                dataset_sizes)
         acc_val.append(epoch_acc_val)
         loss_val.append(epoch_loss_val)
 
