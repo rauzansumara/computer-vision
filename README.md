@@ -1,5 +1,4 @@
-## Comparison of Automated COVID-19 Detection using CNNs on Chest CT
-Images 
+## Comparison of Automated COVID-19 Detection using CNNs on Chest CT Images 
 
 - Generating and training multiple neural network architectures on COVID CT dataset.
    - Dividing the dataset into train, test and validation and balancing the dataset.
